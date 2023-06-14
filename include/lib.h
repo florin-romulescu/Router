@@ -8,6 +8,11 @@
 
 #define MAX_PACKET_LEN 1600
 #define ROUTER_NUM_INTERFACES 3
+#define ARP_REQUEST 1
+#define ARP_REPLY 2
+#define ARP_TYPE 0x0806
+#define IPv4_TYPE 0x0800
+#define ARPTABLE "test_arp_table.txt"
 
 int send_to_link(int interface, char *frame_data, size_t length);
 
@@ -21,6 +26,11 @@ int send_to_link(int interface, char *frame_data, size_t length);
  * Returns: the interface it has been received from.
  */
 int recv_from_any_link(char *frame_data, size_t *length);
+
+struct icmp_type {
+	uint8_t type;
+	uint8_t code;
+};
 
 /* Route table entry */
 struct route_table_entry {
@@ -85,6 +95,69 @@ int read_rtable(const char *path, struct route_table_entry *rtable);
  * function returns the size of the arp table.
  * */
 int parse_arp_table(char *path, struct arp_entry *arp_table);
+
+/*
+* Returns the arp entry that matches the ip address.
+* Returns NULL if no entry is found.
+*/
+struct arp_entry* get_arp_entry(struct arp_entry* table,
+									  unsigned int table_length,
+									  uint32_t addr);
+
+/*
+* Create and send an ARP request on the specified interface.
+* @param interface - the interface on which to send the request
+* @param ip - the ip address for which to send the request
+*/
+int send_arp_request(int interface, uint32_t ip);
+
+/*
+* Create and send an ARP reply on the specified interface.
+* @param interface - the interface on which to send the reply
+* @param ip - the ip address for which to send the reply
+*/
+int send_arp_reply(int interface, uint32_t ip, uint8_t *destination_mac);
+
+/*
+* Adds an arp entry to the arp table.
+* @param table - the arp table
+* @param table_length - the length of the arp table
+* @param ip - the ip address of the entry
+* @param mac - the mac address of the entry
+*/
+void add_arp_entry(struct arp_entry *table, unsigned int *table_length,
+				   uint32_t ip, uint8_t *mac);
+
+/*
+* Create and send an ARP broadcast request on the specified interface.
+* @param interface - the interface on which to send the request
+*/
+int send_broadcast_arp_request(int interface);
+
+/*
+* Create and send an ICMP message on the specified interface with the specified type and code.
+* @param interface - the interface on which to send the message
+* @param buf - the buffer containing the message
+* @param len - the length of the message
+* @param type - the type of the message
+* @param code - the code of the message
+*/
+int send_icmp_message(int interface,
+					  void* buf, size_t len,
+					  uint16_t type,
+					  uint16_t code);
+
+/*
+* Create and send an ICMP error message on the specified interface with the specified type and code.
+* @param interface - the interface on which to send the message
+* @param buf - the buffer received that caused the error
+* @param len - the length of the buffer
+* @param type - the type of the message
+* @param code - the code of the message
+*/
+int send_icmp_err_message(int interface,
+						 void* buf, size_t len,
+						 uint16_t type, uint16_t code);
 
 void init(int argc, char *argv[]);
 

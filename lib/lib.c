@@ -1,4 +1,5 @@
 #include "lib.h"
+#include "protocols.h"
 
 #include <sys/ioctl.h>
 #include <net/if.h>
@@ -244,4 +245,272 @@ int parse_arp_table(char *path, struct arp_entry *arp_table)
 	fclose(f);
 	fprintf(stderr, "Done parsing ARP table.\n");
 	return i;
+}
+
+/*
+	This function will create an ethernet frame with the given
+	destination MAC address, source MAC address and ether_type.
+*/
+struct ether_header create_eth_header(uint8_t *dest_mac,
+									  uint8_t *src_mac,
+									  uint16_t ether_type) {
+	struct ether_header eth_hdr;
+	memcpy(eth_hdr.ether_dhost, dest_mac, 6);
+	memcpy(eth_hdr.ether_shost, src_mac, 6);
+	eth_hdr.ether_type = htons(ether_type);
+	return eth_hdr;
+}
+
+/*
+	This function will create an ARP header with the given
+	sender MAC address, sender IP address, target MAC address
+	and target IP address.
+*/
+struct arp_header create_arp_header(uint8_t *sender_mac,
+									uint32_t sender_ip,
+									uint8_t *target_mac,
+									uint32_t target_ip,
+									uint16_t op) {
+	struct arp_header arp_hdr;
+	arp_hdr.htype = htons(1);
+	arp_hdr.ptype = htons(0x800);
+	arp_hdr.hlen = 6;
+	arp_hdr.plen = 4;
+	arp_hdr.op = htons(op);
+	memcpy(arp_hdr.sha, sender_mac, 6);
+	arp_hdr.spa = sender_ip;
+	memcpy(arp_hdr.tha, target_mac, 6);
+	arp_hdr.tpa = target_ip;
+	return arp_hdr;
+}
+
+struct arp_entry* get_arp_entry(struct arp_entry* table,
+									  unsigned int table_length,
+									  uint32_t addr) {
+	for (int i = 0; i < table_length; ++i) {
+		if (ntohl(table[i].ip) == ntohl(addr)) {
+			return &table[i];
+		}
+	}
+	return NULL;
+}
+
+/*
+    Send an ARP request to the given IP address and interface.
+    The function should return 0 on success and -1 on failure.
+*/
+int send_arp_request(int interface, uint32_t ip) {
+	uint8_t* sender_mac = malloc(6 * sizeof(uint8_t));
+	get_interface_mac(interface, sender_mac);
+	
+    // Create the ethernet header
+	struct ether_header eth_hdr = create_eth_header(
+		(uint8_t *)"\xff\xff\xff\xff\xff\xff", // Broadcast MAC
+		sender_mac, // Source MAC
+		(0x0806) // ARP
+	);
+
+	// Create the ARP header
+	struct arp_header arp_hdr = create_arp_header(
+		sender_mac, // Sender MAC
+		inet_addr(get_interface_ip(interface)), // Sender IP
+		(uint8_t *)"\x00\x00\x00\x00\x00\x00", // Target MAC
+		ip, // Target IP
+		(1) // ARP request
+	);
+
+	// Create the buffer
+	void *buf = malloc(sizeof(struct ether_header) + sizeof(struct arp_header));
+	memcpy(buf, &eth_hdr, sizeof(struct ether_header));
+	memcpy(buf + sizeof(struct ether_header), &arp_hdr, sizeof(struct arp_header));
+
+	// Send the packet
+	int ret = send_to_link(interface, buf, sizeof(struct ether_header) + sizeof(struct arp_header));
+	if (ret < 0) {
+		return -1; // Error when sending
+	}
+
+	return 0;
+}
+
+/*
+	Send a broadcast ARP request to an interface.
+*/
+int send_broadcast_arp_request(int interface) {
+	uint8_t* sender_mac = malloc(6 * sizeof(uint8_t));
+	get_interface_mac(interface, sender_mac);
+
+	// Create the ethernet header
+	struct ether_header eth_hdr = create_eth_header(
+		(uint8_t *)"\xff\xff\xff\xff\xff\xff", // Broadcast MAC
+		sender_mac, // Source MAC
+		(0x0806) // ARP
+	);
+
+	// Create the ARP header
+	struct arp_header arp_hdr = create_arp_header(
+		sender_mac, // Sender MAC
+		inet_addr(get_interface_ip(interface)), // Sender IP
+		(uint8_t *)"\x00\x00\x00\x00\x00\x00", // Target MAC
+		0, // Target IP
+		(1) // ARP request
+	);
+
+	// Create the buffer
+	void *buf = malloc(sizeof(struct ether_header) + sizeof(struct arp_header));
+	memcpy(buf, &eth_hdr, sizeof(struct ether_header));
+	memcpy(buf + sizeof(struct ether_header), &arp_hdr, sizeof(struct arp_header));
+
+	// Send the packet
+	int ret = send_to_link(interface, buf, sizeof(struct ether_header) + sizeof(struct arp_header));
+	if (ret < 0) {
+		return -1; // Error when sending
+	}
+
+	return 0;
+}
+
+/*
+	Send an ARP reply to the given IP address and interface.
+	The function should return 0 on success and -1 on failure.
+*/
+int send_arp_reply(int interface, uint32_t ip, uint8_t *destination_mac) {
+	uint8_t* sender_mac = malloc(6 * sizeof(uint8_t));
+	get_interface_mac(interface, sender_mac);
+
+	// Create the ethernet header
+	struct ether_header eth_hdr = create_eth_header(
+		destination_mac,
+		sender_mac, // Source MAC
+		(0x0806) // ARP
+	);
+
+	// Create the ARP header
+	struct arp_header arp_hdr = create_arp_header(
+		sender_mac, // Sender MAC
+		inet_addr(get_interface_ip(interface)), // Sender IP
+		destination_mac, // Target MAC
+		ip, // Target IP
+		(2) // ARP reply
+	);
+
+	// Create the buffer
+	void *buf = malloc(sizeof(struct ether_header) + sizeof(struct arp_header));
+	memcpy(buf, &eth_hdr, sizeof(struct ether_header));
+	memcpy(buf + sizeof(struct ether_header), &arp_hdr, sizeof(struct arp_header));
+
+	// Send the packet
+	int ret = send_to_link(interface, buf, sizeof(struct ether_header) + sizeof(struct arp_header));
+	if (ret < 0) {
+		return -1; // Error when sending
+	}
+
+	return 0;
+}
+
+/*
+	Create an arp entry in the arp table.
+*/
+void add_arp_entry(struct arp_entry *table, unsigned int *table_length,
+				   uint32_t ip, uint8_t *mac) {
+	for (int i = 0; i < *table_length; ++i) {
+		if (ntohl(table[i].ip) == ntohl(ip)) {
+			memcpy(table[i].mac, mac, 6);
+			return;
+		}
+	}
+	table[*table_length].ip = ip;
+	memcpy(table[*table_length].mac, mac, 6);
+	*table_length += 1;
+	// write_arp_table(ARPTABLE, table, table_length + 1);
+}
+
+/*
+	Create icmp header.
+*/
+struct icmphdr create_icmp_header(uint16_t type, uint16_t code, uint16_t checksum, uint16_t id, uint16_t seq) {
+	struct icmphdr icmp_hdr;
+	icmp_hdr.type = type;
+	icmp_hdr.code = code;
+	icmp_hdr.checksum = checksum;
+	icmp_hdr.un.echo.id = id;
+	icmp_hdr.un.echo.sequence = seq;
+	return icmp_hdr;
+}
+
+int send_icmp_err_message(int interface,
+						 void* buf, size_t len,
+						 uint16_t type, uint16_t code) {
+	// Create the icmp header
+	struct icmphdr icmp_hdr = create_icmp_header(
+		type,
+		code,
+		0,
+		0,
+		0
+	);
+	icmp_hdr.checksum = checksum((uint16_t*)&icmp_hdr, sizeof(struct icmphdr));
+	// Get the ip header
+	struct iphdr* ip_hdr = (struct iphdr*)(buf + sizeof(struct ether_header));
+
+	// Create the buffer
+	void *new_buf = malloc(64 + sizeof(struct iphdr) + sizeof(struct icmphdr));
+	memcpy(new_buf, buf, 64);
+	memcpy(new_buf + 64, ip_hdr, sizeof(struct iphdr));
+	memcpy(new_buf + 64 + sizeof(ip_hdr), &icmp_hdr, sizeof(struct icmphdr));
+
+	send_to_link(interface, new_buf, 64 + sizeof(struct iphdr) + sizeof(struct icmphdr));
+
+	return 0;
+}
+
+/*
+	Send ICMP message to the given IP address and interface.
+*/
+int send_icmp_message(int interface,
+					  void *buf, size_t len,
+					  uint16_t type, uint16_t code) {
+	struct ether_header* given_eth_hdr = (struct ether_header*)buf;
+	struct iphdr* given_ip_hdr = (struct iphdr*)(buf + sizeof(struct ether_header));
+	struct icmphdr* given_icmp_hdr = (struct icmphdr*)(buf + sizeof(struct ether_header) + sizeof(struct iphdr));
+
+	// Create the ethernet header
+	struct ether_header eth_hdr = create_eth_header(
+		given_eth_hdr->ether_shost, // Destination MAC
+		given_eth_hdr->ether_dhost, // Source MAC
+		(0x0800) // Ethernet type
+	);
+	// Create the IP header
+	struct iphdr ip_hdr;
+	ip_hdr.version = (4);
+	ip_hdr.ihl = sizeof(struct iphdr) / 4;
+	ip_hdr.tos = (0);
+	ip_hdr.tot_len = htons(sizeof(struct iphdr) + sizeof(struct icmphdr));
+	ip_hdr.id = (0);
+	ip_hdr.frag_off = 0; 
+	ip_hdr.ttl = (64);
+	ip_hdr.protocol = (1);
+	ip_hdr.check = 0;
+	ip_hdr.saddr = given_ip_hdr->daddr;
+	ip_hdr.daddr = given_ip_hdr->saddr;
+	ip_hdr.check = checksum((uint16_t*)&ip_hdr, sizeof(struct iphdr));
+
+	// Create the ICMP header
+	struct icmphdr icmp_hdr = create_icmp_header(
+		(type), // Type
+		(code), // Code
+		0, // Checksum
+		given_icmp_hdr->un.echo.id, // ID
+		given_icmp_hdr->un.echo.sequence // Sequence
+	);
+
+	icmp_hdr.checksum = ntohs(checksum((uint16_t*)&icmp_hdr, sizeof(struct icmphdr)));
+	void* new_buf = malloc(sizeof(struct ether_header) + sizeof(struct iphdr) + sizeof(struct icmphdr));
+	memcpy(new_buf, &eth_hdr, sizeof(struct ether_header));
+	memcpy(new_buf + sizeof(struct ether_header), &ip_hdr, sizeof(struct iphdr));
+	memcpy(new_buf + sizeof(struct ether_header) + sizeof(struct iphdr), &icmp_hdr, sizeof(struct icmphdr));
+
+	// Send the packet
+	send_to_link(interface, new_buf, sizeof(struct ether_header) + sizeof(struct iphdr) + sizeof(struct icmphdr));
+	return 0;
 }

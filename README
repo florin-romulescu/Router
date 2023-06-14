@@ -1,0 +1,116 @@
+#### Assignment 1 - PCOM
+#### Student: Romulescu Florin-Sorin
+
+
+# ROUTER DATAPLANE
+
+## 1. Description
+As part of this assignment, our task is to design and implement a router dataplane that is capable of receiving Internet Control Message Protocol (ICMP) packets and forwarding them to their intended destination hosts. In addition, the router must be able to autonomously generate its Address Resolution Protocol (ARP) table and provide ICMP responses when it is the targeted destination.
+
+## 2. Implementation
+
+### 2.1. Routing
+The `recv_from_any_link` function is responsible for extracting the Ethernet and IPv4 headers from each received packet. The ARP header is extracted in case the Ethernet `type` indicates that it is an ARP packet. 
+
+```C
+    struct ether_header *eth_hdr = (struct ether_header *) buf;
+    // Some code
+    struct iphdr *ip_hdr = (struct iphdr *) (buf + sizeof(struct ether_header));
+```
+
+The router then sets the `checksum` to zero and recalculates it to detect any errors that may have occurred during transmission. If the new checksum differs from the old one, the router sends an ICMP packet to the source of the packet, which is discussed in the ICMP section.
+```C
+if (old_checksum != new_checksum) {
+    fprintf(stderr, "Packet corrupted! Sending ICMP message...\n");
+    send_icmp_message(interface, buf, len, 3, 0);
+    continue;
+}
+```
+The router then decrements the `Time-to-Live` (TTL) value of the packet. If it is zero, an ICMP packet is sent to the source of the packet.
+
+ The router then attempts to find a routing entry in its routing table using `Longest Prefix Match`. If the router fails to find an entry, the packet is dropped since it does not have a default gateway to which it can send the packet.
+
+```C
+struct route_table_entry *entry = get_table_entry(table, rlength, ip_hdr->daddr);
+if (entry == NULL) {
+    fprintf(stderr, "No entry found! Dropping...\n");
+    continue;
+}
+```
+
+When a routing entry is found, the router attempts to find an `ARP entry` in its `ARP buffer`. If there is no entry found, the packet is added to a queue, and an ARP request is sent to populate the buffer. This process is further discussed in the ARP section.
+
+Finally, the router reconstructs the packet so that the `sender's MAC address` is `the router's hardware address`, and the `destination's MAC address` is the `ARP entry's MAC address`. The router then recalculates the checksum to match the changes, and the packet is sent to the interface from the routing table.
+
+```C
+ip_hdr->check = ntohs(checksum((uint16_t*) ip_hdr, sizeof(struct iphdr)));
+
+interface = entry->interface;
+uint8_t int_mac[6];
+get_interface_mac(interface, int_mac);
+
+memcpy(eth_hdr->ether_shost, int_mac, 6*sizeof(uint8_t));
+memcpy(eth_hdr->ether_dhost, arp_entry->mac, 6*sizeof(uint8_t));
+
+send_to_link(interface, buf, len);
+```
+
+### 2.2 ARP
+The router determines whether the packet is an IPv4 or ARP packet based on the `Ethernet type`, which is `0x800` for IPv4 and `0x806` for ARP. The router then determines if the packet is an ARP `request` or `reply` by examining the op field, which is `1` for Request and `2` for Reply.
+
+```C
+if (ntohs(eth_hdr->ether_type) == ARP_TYPE) {
+    // Code
+    if (ntohs(arp_hdr->op) == ARP_REQUEST) {
+        // Code
+    } else if (ntohs(arp_hdr->op) == ARP_REPLY) {
+        // Code
+    }
+}
+```
+
+If the packet is an `ARP request`, the router determines whether it is for itself by checking if the hardware address matches the router's hardware address or if it is a broadcast address. If the request is for the router, the router sends an `ARP reply` with its hardware address and adds the (MAC address, IP address) pair of the source to the ARP buffer.
+
+```C
+send_arp_reply(interface, arp_hdr->spa, arp_hdr->sha);
+add_arp_entry(arp, &arp_length, arp_hdr->spa, arp_hdr->sha);
+```
+
+If the ARP packet is a reply and is for the router, the router adds the pair to the ARP buffer as before and loops through its queue to check if it can find an ARP entry for the packets. If an entry is found, it continues from where it stopped in the IPv4 section.
+
+### 2.3 ICMP
+The router generates ICMP packets in response to certain events, such as checksum errors or TTL timeouts. When there is no path found in the routing table, the router sends an ICMP packet to the source of the packet. When the TTL value of the packet is zero, an ICMP packet is sent to the source of the packet.
+
+```C
+if (ip_hdr->ttl - 1 < 1) {
+    fprintf(stderr, "TTL reached zero. Sending ICMP message...\n");
+    send_icmp_message(interface, buf, len, 11, 0);
+    continue;
+}
+```
+
+Also if the icmp packet has the interface ip address than we will drop the packet and respond with an ICMP reply.
+
+```C
+if (ip_hdr->daddr == inet_addr(get_interface_ip(interface))) { // We received a packet for this router
+    struct icmphdr *icmp_hdr = (struct icmphdr *) (buf + sizeof(struct ether_header) + sizeof(struct iphdr));
+    if (icmp_hdr->type == 8) { // We received an ICMP echo request
+        send_icmp_message(interface, buf, len, 0, 0); // Send an ICMP echo reply
+    }
+    continue;
+}
+```
+
+## 3. Others
+Helper functions are located in `router.c` and `lib.h`.
+
+The helper functions are contained within the router.c file and lib.h header file.
+
+Through the completion of this assignment, I have acquired knowledge and skills in the following areas:
+
+- Understanding the routing process and its components
+- Comprehending the Ethernet, ARP, IPv4, and ICMP protocols and how they function within a network
+- Identifying potential network flow issues and errors
+- Utilizing tools like Wireshark for network analysis and debugging
+
+In conclusion, this assignment was a valuable and enriching learning experience, even though I was not able to implement the optimized version of LPM.
